@@ -59,6 +59,53 @@ void init_machine(void)
 void inst_cls(){
     // CLS - clear the display
     for(int i = 0; i < SCRN_SIZE; i++) SCREEN[i] = 0; // black screen
+    PC += 2;
+}
+
+void inst_ret(){
+    // RET - return from a subroutine
+    PC = STACK[SP]; // set the address for the top of the stack
+    SP--; // substract 1 from stack pointer
+}
+
+void inst_jp(uint16_t address){
+    // JP addr - jump to a location address
+    PC = address;
+}
+
+void inst_call(uint16_t address){
+    // CALL addr - call a subroutine at addr
+    SP += 1;
+    STACK[SP] = PC;
+    PC = address;
+}
+
+void inst_se(uint8_t x, uint8_t kk){
+    // SE Vx, byte - skip next instruction if Vx = kk
+    if(V[x] == kk) PC += 4;
+    else{
+        PC += 2;
+    }
+}
+
+void inst_sne(uint8_t x, uint8_t kk){
+    // SNE Vx, byte - skip next instruction if Vx != kk
+    if(V[x] != kk) PC += 4;
+    else{
+        PC += 2;
+    }
+}
+
+void inst_ld(uint8_t x, uint8_t kk){
+    // LD Vx, byte - put the value kk into register Vx
+    V[x] = kk;
+    PC += 2;
+}
+
+void inst_add(uint8_t x, uint8_t kk){
+    // ADD Vx, byte - adds the value byte to value of register Vx and stores result in Vx
+    V[x] += kk;
+    PC += 2;
 }
 
 void decodeAndExecute(uint16_t opcode){
@@ -92,10 +139,9 @@ void decodeAndExecute(uint16_t opcode){
         case 0x0: // CLS or SYS or RET
             if(sb == 0xe0){
                 inst_cls();
-                PC += 2;
             }
             else if(sb == 0xee){
-                //TODO: RET
+                inst_ret();
             }
             else{
                 // TODO: SYS addr ([0]=ss, [1]=ts, [2]=ffs)
@@ -103,22 +149,30 @@ void decodeAndExecute(uint16_t opcode){
             }
             break;
         case 0x1: // JP addr ([0]=ss, [1]=ts, [2] = ffs)
+            inst_jp(nnn);
             break;
         case 0x2: // CALL addr ([0]=ss, [1,2]=sb)
+            inst_call(nnn);
             break;
         case 0x3: // SE Vx (x=ss), byte (byte=sb)
+            inst_se(ss, sb);
             break;
         case 0x4: // SNE Vx (x=ss), byte (byte=sb)
+            inst_sne(ss, sb);
             break;
         case 0x5: // SE Vx (x=ss), Vy (y=ts)
+            inst_se(ss, V[ts]);
             break;
         case 0x6: // LD Vx (x=ss), byte (byte=sb)
+            inst_ld(ss, sb);
             break;
         case 0x7: // ADD Vx (xx=ss), byte (byte=sb)
+            inst_add(ss, sb);
             break;
         case 0x8: 
             switch(ffs){
                 case 0x0: // LD Vx (x=ss), Vy (y=ts)
+                    inst_ld(ss, V[ts]);
                     break;
                 case 0x1: // OR Vx (x=ss), Vy (y=ts)
                     break;
