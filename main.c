@@ -56,6 +56,11 @@ void init_machine(void)
     for(int i = 0; i < STCK_SIZE; i++) STACK[i] = 0;
 }
 
+void inst_cls(){
+    // CLS - clear the display
+    for(int i = 0; i < SCRN_SIZE; i++) SCREEN[i] = 0 // black screen
+}
+
 void decodeAndExecute(uint16_t opcode){
     /*
     opcode = 
@@ -86,7 +91,8 @@ void decodeAndExecute(uint16_t opcode){
     switch(fs){
         case 0x0: // CLS or SYS or RET
             if(sb == 0xe0){
-                //TODO: CLS
+                inst_cls();
+                PC += 2;
             }
             else if(sb == 0xee){
                 //TODO: RET
@@ -110,7 +116,27 @@ void decodeAndExecute(uint16_t opcode){
             break;
         case 0x7: // ADD Vx (xx=ss), byte (byte=sb)
             break;
-        case 0x8: //there are 8 different instructions, starting with 8 but have different lst (fs) symbol. I'll think about how to process that later
+        case 0x8: 
+            switch(ffs){
+                case 0x0: // LD Vx (x=ss), Vy (y=ts)
+                    break;
+                case 0x1: // OR Vx (x=ss), Vy (y=ts)
+                    break;
+                case 0x2: // AND Vx, Vy
+                    break;
+                case 0x3: // XOR Vx, Vy
+                    break;
+                case 0x4: // ADD Vx, Vy
+                    break;
+                case 0x5: // SUB Vx, Vy
+                    break;
+                case 0x6: // SHR Vx, Vy
+                    break;
+                case 0x7: // SUBN Vx, Vy
+                    break;
+                case 0xe: // SHL Vx, Vy
+                    break;
+            }
             break;
         case 0x9: // SNE Vx (x=ss), Vy (y=ts)
             break;
@@ -122,9 +148,35 @@ void decodeAndExecute(uint16_t opcode){
             break;
         case 0xd: // DRW Vx (x=ss), Vy (y=ts), nibble (nibble=ffs)
             break;
-        case 0xe: //there are 2 instructions
+        case 0xe:
+            if(sb == 0x9e){
+                // SKP Vx (x=ss)
+            }
+            else if (sb == 0xa1){
+                // SKNP Vx (x=ss)
+            }
             break;
-        case 0xf: //there are 9 instructions
+        case 0xf:
+            switch(sb){
+                case 0x07: // LD Vx, DT
+                    break;
+                case 0x0a: // LD Vx, K
+                    break;
+                case 0x15: // LD DT, Vx
+                    break;
+                case 0x18: // LD ST, Vx
+                    break;
+                case 0x1e: // ADD I, Vx
+                    break;
+                case 0x29: // LD F, Vx
+                    break;
+                case 0x33: // LD B, Vx
+                    break;
+                case 0x55: // LD [I], Vx
+                    break;
+                case 0x65: // LD Vx, [I]
+                    break;
+            }
             break;
     }
 }
@@ -135,7 +187,6 @@ int main(void){
     while(1){
         uint16_t opcode = MEMORY[PC] << 8 | MEMORY[PC + 1]; // memory consists of 8-bits chunks, so we need to read 2
         decodeAndExecute(opcode); 
-        PC += 2;
     }
 
     return 0;
