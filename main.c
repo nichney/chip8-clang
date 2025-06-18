@@ -235,6 +235,7 @@ void inst_ret(){
     // RET - return from a subroutine
     PC = STACK[SP]; // set the address for the top of the stack
     SP--; // substract 1 from stack pointer
+    PC += 2;
 }
 
 void inst_jp(uint16_t address){
@@ -511,7 +512,8 @@ void decodeAndExecute(uint16_t opcode){
             else{
                 // TODO: SYS addr ([0]=ss, [1]=ts, [2]=ffs)
                 // As Cowgos's Technical reference says, this instruction is only used on the old computers and is not supported in modern interpreters, but I will add it for backward compatibility
-                inst_jp(nnn);
+                //inst_jp(nnn);
+                PC += 2;
             }
             break;
         case 0x1: // JP addr ([0]=ss, [1]=ts, [2] = ffs)
