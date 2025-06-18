@@ -227,6 +227,7 @@ int handle_input() {
 void inst_cls(){
     // CLS - clear the display
     for(int i = 0; i < SCRN_SIZE; i++) SCREEN[i] = 0; // black screen
+    draw_screen_flag = 1; // clear the screen immidietly
     PC += 2;
 }
 
@@ -510,6 +511,7 @@ void decodeAndExecute(uint16_t opcode){
             else{
                 // TODO: SYS addr ([0]=ss, [1]=ts, [2]=ffs)
                 // As Cowgos's Technical reference says, this instruction is only used on the old computers and is not supported in modern interpreters, but I will add it for backward compatibility
+                inst_jp(nnn);
             }
             break;
         case 0x1: // JP addr ([0]=ss, [1]=ts, [2] = ffs)
