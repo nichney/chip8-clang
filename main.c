@@ -58,7 +58,7 @@ void init_machine(void)
 
 void inst_cls(){
     // CLS - clear the display
-    for(int i = 0; i < SCRN_SIZE; i++) SCREEN[i] = 0 // black screen
+    for(int i = 0; i < SCRN_SIZE; i++) SCREEN[i] = 0; // black screen
 }
 
 void decodeAndExecute(uint16_t opcode){
@@ -86,7 +86,7 @@ void decodeAndExecute(uint16_t opcode){
     uint8_t ts = (sb >> 4) & 0x0f; // third symbol
     uint8_t ffs = sb & 0x0f; // fourth symbol
     // some instructions requires 2-nd, 3-rd and 4-th bytes as address
-    uint16_t nnn = ((*opcode) & 0x0fff);
+    uint16_t nnn = opcode & 0x0fff;
 
     switch(fs){
         case 0x0: // CLS or SYS or RET
@@ -183,6 +183,7 @@ void decodeAndExecute(uint16_t opcode){
 
 int main(void){
     
+    init_machine();
     // main cycle
     while(1){
         uint16_t opcode = MEMORY[PC] << 8 | MEMORY[PC + 1]; // memory consists of 8-bits chunks, so we need to read 2
