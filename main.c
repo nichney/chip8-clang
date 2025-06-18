@@ -1,9 +1,14 @@
 // CHIP-8 interpreter
+#include <stdlib.h>
+#include <time.h>
 #include <stdint.h>
 
 #define MEM_SIZE 4096
 #define STCK_SIZE 16
 #define SCRN_SIZE 64*32
+
+// hidden registers
+int waiting_for_key = 0, key_dest = 0;
 
 // common-use registers
 uint8_t V[16]; //V[0]-V[0xF]
@@ -54,6 +59,8 @@ void init_machine(void)
     }
     for(int i = 0; i < SCRN_SIZE; i++) SCREEN[i] = 0; //black screen
     for(int i = 0; i < STCK_SIZE; i++) STACK[i] = 0;
+
+    srand(time(NULL));
 }
 
 void inst_cls(){
@@ -107,6 +114,211 @@ void inst_add(uint8_t x, uint8_t kk){
     V[x] += kk;
     PC += 2;
 }
+
+void inst_or(uint8_t x, uint8_t y){
+    // OR Vx, Vy - bitwise OR on the values Vx and Vy and store result in Vx
+    V[x] = V[x] | V[y];
+    PC += 2;
+}
+
+void inst_and(uint8_t x, uint8_t y){
+    // AND Vx, Vy - bitwise AND on the values Vx and Vy and store result in Vx
+    V[x] = V[x] & V[y];
+    PC += 2;
+}
+
+void inst_xor(uint8_t x, uint8_t y){
+    // XOR Vx, Vy - bitwise XOR on the values Vx and Vy and store result in Vx
+    V[x] = V[x] ^ V[y];
+    PC += 2;
+}
+
+void inst_add_vx_vy(uint8_t x, uint8_t y){
+    // ADD Vx, Vy - The values of Vx and Vy are added together, if the result is greater that 8 bits then VF is set to 1, otherwise 0
+    uint16_t sum = 0;
+    sum = V[x] + V[y];
+    V[x] = sum & 0x00ff; // only 8 bits are stored in V[x]
+    if(sum & 0xff00 == 0x0000){ // no overflow
+        V[0xf] = 0;
+    }
+    else{
+        V[0xf] = 1;
+    }
+    PC += 2;
+}
+
+void inst_sub_vx_vy(uint8_t x, uint8_t y){
+    // SUB Vx, Vy - Vx minus Vy and store in Vx, set VF to 1 if Vx > Vy
+    if(V[x] > V[y]){
+        V[0xf] = 1;
+    }
+    else{
+        V[0xf] = 0;
+    }
+    V[x] -= V[y];
+    PC += 2;
+}
+
+void inst_shr(uint8_t x){
+    // SHR Vx - If the least-significant bit of Vx is 1, then VF is set to 1, then Vx is divided by 2
+    if(V[x] & 0x1){
+        V[0xf] = 1;
+    }
+    else{
+        V[0xf] = 0;
+    }
+    V[x] = V[x] / 2;
+    PC += 2;
+}
+
+void inst_subn_vx_vy(uint8_t x, uint8_t y){
+    // SUBN Vx, Vy - Vy minus Vx and store in Vx, set VF to 1 if Vy > Vx
+    if(V[x] < V[y]){
+        V[0xf] = 1;
+    }
+    else{
+        V[0xf] = 0;
+    }
+    V[x] = V[y] - V[x];
+    PC += 2;
+}
+
+void inst_shl(uint8_t x){
+    // SHL Vx - if the most-significant bit of Vx is 1, then VF = 1, then Vx multiplied by 2
+    if((V[x]>>7)&0x1){
+        V[0xf] = 1;
+    }
+    else{
+        V[0xf] = 0;
+    }
+    V[x] *= 2;
+    PC += 2;
+}
+
+void inst_ld_addr(uint16_t addr){
+    // LD I, addr - I is set to addr
+    I = addr;
+    PC += 2;
+}
+
+void inst_jp_v0(uint16_t addr){
+    // JP V0, addr - jump to location addr + V0
+    PC = addr + V[0x0];
+}
+
+void inst_rnd(uint8_t x, uint8_t kk){
+    // RND Vx, byte - Generate random number, AND it with kk and store in Vx
+    int randomNumber = (rand() % 256) & kk;
+    V[x] = randomNumber;
+    PC += 2;
+}
+
+void inst_drw(uint8_t x, uint8_t y, uint8_t n){
+    // DRW Vx, Vy, nibble - display n-byte sprite starting at memory location I at (Vx, Vx), set VF = collision
+    uint8_t vx = V[x] % 64; // width
+    uint8_t vy = V[y] % 32; // height
+    V[0xf] = 0; // reset the collision flag
+    for(int row = 0; row < n; row++){
+        uint8_t sprite_byte = MEMORY[I+row];
+        for(int col = 0; col < 8; col++){
+            uint8_t pixel_sprite = (sprite_byte >> (7 - col)) & 0x1;
+
+            uint8_t x_coord = (vx + col) % 64;
+            uint8_t y_coord = (vy + row) % 32;
+            int screen_index = y_coord * 64 + x_coord;
+
+            if(pixel_sprite){
+                if(SCREEN[screen_index] == 1){
+                    V[0xf] = 1; // collision detected
+                }
+                SCREEN[screen_index] ^= 1;
+            }
+        }
+    }
+    PC += 2;
+}
+
+void inst_skp(uint8_t x){
+    // SKP Vx - skip next instruction if key is pressed (key value is stored in Vx)
+    if(KEYBOARD[V[x]]){
+        PC += 4;
+    }
+    else{
+        PC += 2;
+    }
+}
+
+void inst_sknp(uint8_t x){
+    // SKNP Vx - skip next instruction if key is not pressed
+    if(!KEYBOARD[V[x]]){
+        PC += 4;
+    }
+    else{
+        PC += 2;
+    }
+}
+
+void inst_ld_dt(uint8_t x){
+    // LD Vx, DT - set Vx to delay timer value
+    V[x] = DT;
+    PC += 2;
+}
+
+void inst_ld_k(uint8_t x){
+    // LD Vx, K - wait for a key press, store the value of key in Vx
+    waiting_for_key = 1;
+    key_dest = x;
+}
+
+void inst_dt_ld(uint8_t x){
+    // LD DT, Vx - set display timer to Vx
+    DT = V[x];
+    PC += 2;
+}
+
+void inst_st_ld(uint8_t x){
+    // LD ST, Vx - set sound timer to Vx
+    ST = V[x];
+    PC += 2;
+}
+
+void inst_add_i(uint8_t x){
+    // ADD I, Vx - set I = I + Vx
+    I += V[x];
+    PC += 2;
+}
+
+void inst_f_ld(uint8_t x){
+    // LD F, Vx - set I = location of sprite for digit Vx
+    I = V[x] * 5; // sprites are 5 bytes long
+    PC += 2;
+}
+
+void inst_bcd_ld(uint8_t x){
+    // LD B, Vx - store BCD representation of Vx in memory locations I, I+1 and I+2
+    MEMORY[I] = (V[x] % 1000 - V[x] % 100) / 100;
+    MEMORY[I+1] = (V[x] % 100 - V[x] % 10) / 10;
+    MEMORY[I+2] = V[x] % 10;
+    PC += 2;
+}
+
+void inst_store_registers(uint8_t x){
+    // LD [I], Vx - copy registers to memory
+    for(int i = 0; i < x+1; i++){
+        MEMORY[I+i] = V[i];
+    }
+    PC += 2;
+}
+
+void inst_read_registers(uint8_t x){
+    // LD Vx, [I] - read from memory to registers
+    for(int i = 0; i < x+1; i++){
+        V[i] = MEMORY[I+i];
+    }
+    PC += 2;
+}
+
+
 
 void decodeAndExecute(uint16_t opcode){
     /*
@@ -175,62 +387,95 @@ void decodeAndExecute(uint16_t opcode){
                     inst_ld(ss, V[ts]);
                     break;
                 case 0x1: // OR Vx (x=ss), Vy (y=ts)
+                    inst_or(ss, ts);
                     break;
                 case 0x2: // AND Vx, Vy
+                    inst_and(ss, ts);
                     break;
                 case 0x3: // XOR Vx, Vy
+                    inst_xor(ss, ts);
                     break;
                 case 0x4: // ADD Vx, Vy
+                    inst_add_vx_vy(ss, ts);
                     break;
                 case 0x5: // SUB Vx, Vy
+                    inst_sub_vx_vy(ss, ts);
                     break;
                 case 0x6: // SHR Vx, Vy
+                    inst_shr(ss);
                     break;
                 case 0x7: // SUBN Vx, Vy
+                    inst_subn_vx_vy(ss, ts);
                     break;
                 case 0xe: // SHL Vx, Vy
+                    inst_shl(ss);
+                    break;
+                default:
+                    inst_cls();
                     break;
             }
             break;
         case 0x9: // SNE Vx (x=ss), Vy (y=ts)
+            inst_sne(ss, V[ts]);
             break;
         case 0xa: // LD I, addr ([0]=ss, [1,2]=sb)
+            inst_ld_addr(nnn);
             break;
         case 0xb: // JP V0, addr ([0]=ss, [1,2]=sb)
+            inst_jp_v0(nnn);
             break;
         case 0xc: // RND Vx (x=ss), byte (kk=sb)
+            inst_rnd(ss, sb);
             break;
         case 0xd: // DRW Vx (x=ss), Vy (y=ts), nibble (nibble=ffs)
+            inst_drw(ss, ts, ffs);
             break;
         case 0xe:
             if(sb == 0x9e){
                 // SKP Vx (x=ss)
+                inst_skp(ss);
             }
             else if (sb == 0xa1){
                 // SKNP Vx (x=ss)
+                inst_sknp(ss);
             }
             break;
         case 0xf:
             switch(sb){
                 case 0x07: // LD Vx, DT
+                    inst_ld_dt(ss);
                     break;
                 case 0x0a: // LD Vx, K
+                    inst_ld_k(ss);
                     break;
                 case 0x15: // LD DT, Vx
+                    inst_dt_ld(ss);
                     break;
                 case 0x18: // LD ST, Vx
+                    inst_st_ld(ss);
                     break;
                 case 0x1e: // ADD I, Vx
+                    inst_add_i(ss);
                     break;
                 case 0x29: // LD F, Vx
+                    inst_f_ld(ss);
                     break;
                 case 0x33: // LD B, Vx
+                    inst_bcd_ld(ss);
                     break;
                 case 0x55: // LD [I], Vx
+                    inst_store_registers(ss);
                     break;
                 case 0x65: // LD Vx, [I]
+                    inst_read_registers(ss);
+                    break;
+                default:
+                    inst_cls();
                     break;
             }
+            break;
+        default:
+            inst_cls();
             break;
     }
 }
@@ -240,6 +485,17 @@ int main(void){
     init_machine();
     // main cycle
     while(1){
+        if(waiting_for_key){
+            for(int i = 0; i < 16; i++){
+                if(KEYBOARD[i]){
+                    V[key_dest] = i;
+                    waiting_for_key = 0;
+                    PC += 2;
+                    break;
+                }
+            }
+            continue;
+        }
         uint16_t opcode = MEMORY[PC] << 8 | MEMORY[PC + 1]; // memory consists of 8-bits chunks, so we need to read 2
         decodeAndExecute(opcode); 
     }
