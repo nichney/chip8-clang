@@ -3,13 +3,23 @@
 #include <time.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <SDL.h>
 
 #define MEM_SIZE 4096
 #define STCK_SIZE 16
 #define SCRN_SIZE 64*32
 
+// SDL globals
+SDL_Window* sdlWindow = NULL;
+SDL_Renderer* sdlRenderer = NULL;
+SDL_Texture* sdlTexture = NULL;
+
+// Mapping SDL scancodes to CHIP-8 keys (adjust as needed for your desired layout)
+uint8_t sdl_key_map[SDL_NUM_SCANCODES]; // Max number of scancodes
+
 // hidden registers
 int waiting_for_key = 0, key_dest = 0;
+int draw_screen_flag = 0; // 1 when DRW called
 
 // common-use registers
 uint8_t V[16]; //V[0]-V[0xF]
@@ -93,7 +103,126 @@ void init_machine(void)
     for(int i = 0; i < STCK_SIZE; i++) STACK[i] = 0;
 
     srand(time(NULL));
+
+    // Init SDL
+    if(SDL_Init(SDL_INIT_EVERYTHING) < 0){
+        printf("SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
+        exit(1);
+    }
+
+    // Create window
+    sdlWindow = SDL_CreateWindow("CHIP-8 Emulator", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                                 640, 320, SDL_WINDOW_SHOWN); // 10x scale
+    if (sdlWindow == NULL) {
+        printf("Window could not be created! SDL_Error: %s\n", SDL_GetError());
+        exit(1);
+    }
+
+    // Create renderer
+    sdlRenderer = SDL_CreateRenderer(sdlWindow, -1, SDL_RENDERER_ACCELERATED);
+    if (sdlRenderer == NULL) {
+        printf("Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
+        exit(1);
+    }
+
+    // Create texture for the screen (format is ARGB8888 for easier pixel manipulation)
+    sdlTexture = SDL_CreateTexture(sdlRenderer, SDL_PIXELFORMAT_ARGB8888,
+                                   SDL_TEXTUREACCESS_STREAMING, 64, 32);
+    if (sdlTexture == NULL) {
+        printf("Texture could not be created! SDL_Error: %s\n", SDL_GetError());
+        exit(1);
+    }
+
+    // Clear renderer
+    SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 255); // Black background
+    SDL_RenderClear(sdlRenderer);
+    SDL_RenderPresent(sdlRenderer);
 }
+
+void draw_graphics() {
+    // Create a pixel buffer for SDL Texture
+    uint32_t pixels[SCRN_SIZE]; // ARGB8888 format (32 bits per pixel)
+
+    for (int i = 0; i < SCRN_SIZE; i++) {
+        // If pixel is on (1), make it white; otherwise, black.
+        // ARGB8888: 0xAARRGGBB
+        pixels[i] = SCREEN[i] ? 0xFFFFFFFF : 0xFF000000; // White: 0xFFFFFFFF, Black: 0xFF000000 (opaque alpha)
+    }
+
+    // Update the SDL texture with the pixel data
+    SDL_UpdateTexture(sdlTexture, NULL, pixels, 64 * sizeof(uint32_t));
+
+    // Clear the renderer
+    SDL_RenderClear(sdlRenderer);
+    // Copy the texture to the renderer (scales it to fit the window)
+    SDL_RenderCopy(sdlRenderer, sdlTexture, NULL, NULL);
+    // Present the renderer
+    SDL_RenderPresent(sdlRenderer);
+}
+
+void setup_key_map() {
+    // Initialize all to 0xFF (invalid key)
+    for (int i = 0; i < SDL_NUM_SCANCODES; ++i) {
+        sdl_key_map[i] = 0xFF;
+    }
+
+    // Map common keyboard keys to CHIP-8 hex keypad
+    // CHIP-8 Layout:
+    // 1 2 3 C
+    // 4 5 6 D
+    // 7 8 9 E
+    // A 0 B F
+
+    // My suggested mapping (can be customized):
+    // 1 2 3 4
+    // Q W E R
+    // A S D F
+    // Z X C V
+
+    sdl_key_map[SDL_SCANCODE_1] = 0x1;
+    sdl_key_map[SDL_SCANCODE_2] = 0x2;
+    sdl_key_map[SDL_SCANCODE_3] = 0x3;
+    sdl_key_map[SDL_SCANCODE_4] = 0xC; // C
+
+    sdl_key_map[SDL_SCANCODE_Q] = 0x4;
+    sdl_key_map[SDL_SCANCODE_W] = 0x5;
+    sdl_key_map[SDL_SCANCODE_E] = 0x6;
+    sdl_key_map[SDL_SCANCODE_R] = 0xD; // D
+
+    sdl_key_map[SDL_SCANCODE_A] = 0x7;
+    sdl_key_map[SDL_SCANCODE_S] = 0x8;
+    sdl_key_map[SDL_SCANCODE_D] = 0x9;
+    sdl_key_map[SDL_SCANCODE_F] = 0xE; // E
+
+    sdl_key_map[SDL_SCANCODE_Z] = 0xA; // A
+    sdl_key_map[SDL_SCANCODE_X] = 0x0;
+    sdl_key_map[SDL_SCANCODE_C] = 0xB; // B
+    sdl_key_map[SDL_SCANCODE_V] = 0xF; // F
+}
+
+
+int handle_input() {
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_QUIT) {
+            return 0; // Signal to quit the emulator
+        }
+        if (event.type == SDL_KEYDOWN) {
+            uint8_t chip8_key = sdl_key_map[event.key.keysym.scancode];
+            if (chip8_key != 0xFF) { // If it's a mapped key
+                KEYBOARD[chip8_key] = 1;
+            }
+        }
+        if (event.type == SDL_KEYUP) {
+            uint8_t chip8_key = sdl_key_map[event.key.keysym.scancode];
+            if (chip8_key != 0xFF) { // If it's a mapped key
+                KEYBOARD[chip8_key] = 0;
+            }
+        }
+    }
+    return 1; // Continue emulation
+}
+
 
 void inst_cls(){
     // CLS - clear the display
@@ -267,6 +396,7 @@ void inst_drw(uint8_t x, uint8_t y, uint8_t n){
             }
         }
     }
+    draw_screen_flag = 1;
     PC += 2;
 }
 
@@ -512,25 +642,99 @@ void decodeAndExecute(uint16_t opcode){
     }
 }
 
-int main(void){
+int main(int argc, char* argv[]){
+    if(argc < 2){
+        printf("Usage: %s <path_to_rom>\n", argv[0]);
+        return 1;
+    }
+
     
     init_machine();
+    setup_key_map();
+
+    if(!load_rom(argv[1])){
+        return 1; // ROM reading failed
+    }
+    
+    //main loop variables
+    int quit = 0;
+    uint32_t last_cycle_time = SDL_GetTicks();
+    uint32_t last_timer_update = SDL_GetTicks();
+    const int CPU_CYCLES_PER_FRAME = 10;
+    int cycles_this_frame = 0;
+    int draw_flag = 0; // Flag to indicate if a draw instruction occurred
+
     // main cycle
-    while(1){
-        if(waiting_for_key){
+    while(!quit){
+        
+        if(!handle_input()){
+            quit = 1; // exit
+            continue;
+        }
+
+        // --- Emulation Cycle ---
+        if(!waiting_for_key){
+            uint16_t opcode = MEMORY[PC] << 8 | MEMORY[PC + 1]; // memory consists of 8-bits chunks, so we need to read 2
+            decodeAndExecute(opcode); 
+            cycles_this_frame++;
+            if(draw_screen_flag){
+                draw_graphics();
+                draw_screen_flag = 0; // reset flag after drawing
+            }
+        } else {
+            // If waiting for a key, check if any key is pressed
             for(int i = 0; i < 16; i++){
                 if(KEYBOARD[i]){
                     V[key_dest] = i;
                     waiting_for_key = 0;
-                    PC += 2;
+                    PC += 2; // Only advance PC after a key is pressed and handled
                     break;
                 }
             }
-            continue;
+            // If still waiting, skip the rest of the loop and poll for input again
+            if (waiting_for_key) {
+                // Introduce a small delay to avoid busy-waiting too much
+                SDL_Delay(10);
+                continue;
+            }
         }
-        uint16_t opcode = MEMORY[PC] << 8 | MEMORY[PC + 1]; // memory consists of 8-bits chunks, so we need to read 2
-        decodeAndExecute(opcode); 
+
+        // --- Timer Update ---
+        uint32_t current_time = SDL_GetTicks();
+        if (current_time - last_timer_update >= (1000 / 60)) { // 60 Hz timer update
+            if (DT > 0) DT--;
+            if (ST > 0) {
+                ST--;
+                // TODO: Add sound output here if ST > 0
+            }
+            last_timer_update = current_time;
+        }
+
+        // --- Frame Rate and Graphics Drawing ---
+        // Aim for roughly 60Hz display refresh, and multiple CPU cycles per frame
+        if (current_time - last_cycle_time >= (1000 / 60)) { // ~60 FPS
+            if (draw_flag) { // Only draw if a DRW instruction happened
+                draw_graphics();
+                draw_flag = 0; // Reset flag
+            }
+            last_cycle_time = current_time;
+            cycles_this_frame = 0; // Reset cycle counter for next frame
+        }
+        else if (current_time - last_cycle_time < (1000 / 60) && cycles_this_frame >= CPU_CYCLES_PER_FRAME) {
+            // If we've done enough cycles for this frame, wait for the next frame slot
+            SDL_Delay((1000 / 60) - (current_time - last_cycle_time));
+        }
+
+        // Short delay to prevent busy-waiting, especially if CPU_CYCLES_PER_FRAME is low
+        // and current_time - last_cycle_time is still less than (1000/60)
+        SDL_Delay(1);
     }
+
+    // Clean up SDL resources
+    SDL_DestroyTexture(sdlTexture);
+    SDL_DestroyRenderer(sdlRenderer);
+    SDL_DestroyWindow(sdlWindow);
+    SDL_Quit();
 
     return 0;
 }
