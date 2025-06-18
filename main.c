@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #define MEM_SIZE 4096
 #define STCK_SIZE 16
@@ -40,6 +41,37 @@ const uint8_t fontset[80] = {
   0xF0, 0x80, 0xF0, 0x80, 0x80  // F
 };
 
+int load_rom(const char* filename){
+    // load the rom from real file into MEMORY
+    FILE *rom_file = fopen(filename, "rb");
+    if(rom_file == NULL){
+        printf("Error: could not open ROM file '%s'\n", filename);
+        return 0;
+    }
+
+    /*here we get file size*/
+    fseek(rom_file, 0, SEEK_END);
+    long rom_size = ftell(rom_file);
+    rewind(rom_file); // go to beggining
+
+    /*check if rom is suitable for memory*/
+    if(rom_size > (MEM_SIZE - 0x200)){
+        printf("Error: ROM file '$s' is too large for memory. Size: $ld bytes\n", filename, rom_size);
+        fclose(rom_file);
+        return 0;
+    }
+    
+    /*read rom into memory*/
+    size_t bytes_read = fread(&MEMORY[0x200], 1, rom_size, rom_file);
+    if(bytes_read != rom_size){
+        printf("Warning: Mismatch in bytes read for ROM '%s'. Expected %ld, got %zu\n", filename, rom_size, bytes_read);
+    }
+
+    fclose(rom_file);
+    printf("Successfully loaded ROM '%s' (%ld bytes)\n", filename, rom_size);
+    return 1; 
+
+}
 
 void init_machine(void)
 {
