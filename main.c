@@ -299,7 +299,7 @@ void inst_add_vx_vy(uint8_t x, uint8_t y){
     uint16_t sum = 0;
     sum = V[x] + V[y];
     V[x] = sum & 0x00ff; // only 8 bits are stored in V[x]
-    if(sum & 0xff00 == 0x0000){ // no overflow
+    if((sum & 0xff00) == 0x0000){ // no overflow
         V[0xf] = 0;
     }
     else{
@@ -322,13 +322,8 @@ void inst_sub_vx_vy(uint8_t x, uint8_t y){
 
 void inst_shr(uint8_t x){
     // SHR Vx - If the least-significant bit of Vx is 1, then VF is set to 1, then Vx is divided by 2
-    if(V[x] & 0x1){
-        V[0xf] = 1;
-    }
-    else{
-        V[0xf] = 0;
-    }
-    V[x] = V[x] / 2;
+    V[0xf] = V[x] & 0x1;
+    V[x] >>= 1;
     PC += 2;
 }
 
@@ -346,13 +341,8 @@ void inst_subn_vx_vy(uint8_t x, uint8_t y){
 
 void inst_shl(uint8_t x){
     // SHL Vx - if the most-significant bit of Vx is 1, then VF = 1, then Vx multiplied by 2
-    if((V[x]>>7)&0x1){
-        V[0xf] = 1;
-    }
-    else{
-        V[0xf] = 0;
-    }
-    V[x] *= 2;
+    V[0xf] = (V[x] >> 7) & 0x1;
+    V[x] <<=1;
     PC += 2;
 }
 
@@ -642,99 +632,109 @@ void decodeAndExecute(uint16_t opcode){
     }
 }
 
+
 int main(int argc, char* argv[]){
+    // Check if a ROM file path was provided as a command-line argument
     if(argc < 2){
         printf("Usage: %s <path_to_rom>\n", argv[0]);
         return 1;
     }
 
-    
+    // Initialize the CHIP-8 machine and SDL
     init_machine();
+    // Set up the keyboard mapping for SDL scancodes to CHIP-8 keys
     setup_key_map();
 
+    // Attempt to load the specified ROM file
     if(!load_rom(argv[1])){
-        return 1; // ROM reading failed
+        // If ROM loading fails, exit with an error
+        return 1;
     }
-    
-    //main loop variables
-    int quit = 0;
-    uint32_t last_cycle_time = SDL_GetTicks();
-    uint32_t last_timer_update = SDL_GetTicks();
-    const int CPU_CYCLES_PER_FRAME = 10;
-    int cycles_this_frame = 0;
-    int draw_flag = 0; // Flag to indicate if a draw instruction occurred
 
-    // main cycle
+    // Main emulation loop variables
+    int quit = 0; // Flag to control the main loop (0 to continue, 1 to quit)
+
+    // Timestamps for managing frame rate and timer updates
+    uint32_t last_timer_update = SDL_GetTicks(); // Time of last timer decrement
+    uint32_t last_frame_time = SDL_GetTicks();   // Time of last screen render/frame sync
+
+    // Configuration for emulation speed: number of CHIP-8 cycles to run per 60Hz frame
+    const int CYCLES_PER_FRAME = 10;
+    int cycles_executed_this_frame = 0; // Counter for cycles executed within the current frame
+
+    // Main emulation loop
     while(!quit){
-        
+        // Handle user input (keyboard and window close events)
         if(!handle_input()){
-            quit = 1; // exit
-            continue;
+            quit = 1; // If handle_input returns 0, quit the emulator
+            continue; // Skip the rest of the loop and terminate
         }
 
-        // --- Emulation Cycle ---
+        // --- CHIP-8 Emulation Cycle ---
         if(!waiting_for_key){
-            uint16_t opcode = MEMORY[PC] << 8 | MEMORY[PC + 1]; // memory consists of 8-bits chunks, so we need to read 2
-            decodeAndExecute(opcode); 
-            cycles_this_frame++;
+            // If not waiting for a key press, execute opcodes
+            if (cycles_executed_this_frame < CYCLES_PER_FRAME) {
+                // Fetch the 16-bit opcode from memory (PC points to the first byte)
+                uint16_t opcode = MEMORY[PC] << 8 | MEMORY[PC + 1];
+                decodeAndExecute(opcode); // Decode and execute the instruction
+                cycles_executed_this_frame++; // Increment cycle counter
+            }
+
+            // If a DRW instruction was executed and signaled a screen redraw
             if(draw_screen_flag){
-                draw_graphics();
-                draw_screen_flag = 0; // reset flag after drawing
+                draw_graphics();      // Perform the drawing operation
+                draw_screen_flag = 0; // Reset the flag
             }
         } else {
-            // If waiting for a key, check if any key is pressed
+            // If the emulator is in a 'waiting for key' state (FX0A instruction)
+            int key_found = 0;
+            // Iterate through all possible CHIP-8 keys to check for a press
             for(int i = 0; i < 16; i++){
-                if(KEYBOARD[i]){
-                    V[key_dest] = i;
-                    waiting_for_key = 0;
-                    PC += 2; // Only advance PC after a key is pressed and handled
-                    break;
+                if(KEYBOARD[i]){ // If a key is currently pressed
+                    V[key_dest] = i;       // Store the pressed key's value in the target Vx register
+                    waiting_for_key = 0;   // Reset the waiting flag
+                    PC += 2;               // Advance PC (as specified by FX0A behavior)
+                    key_found = 1;         // Mark that a key was found
+                    break;                 // Exit the loop (only one key is needed)
                 }
             }
-            // If still waiting, skip the rest of the loop and poll for input again
-            if (waiting_for_key) {
-                // Introduce a small delay to avoid busy-waiting too much
-                SDL_Delay(10);
-                continue;
+            // If no key was found yet, pause briefly and continue waiting
+            if (!key_found) {
+                SDL_Delay(10); // Small delay to prevent busy-waiting while waiting for key
+                continue;      // Skip timer updates and frame rate control until a key is pressed
             }
         }
 
-        // --- Timer Update ---
+        // --- Timer Update and Frame Rate Control ---
         uint32_t current_time = SDL_GetTicks();
-        if (current_time - last_timer_update >= (1000 / 60)) { // 60 Hz timer update
-            if (DT > 0) DT--;
+
+        // Update timers (DT and ST) at approximately 60 Hz
+        if (current_time - last_timer_update >= (1000 / 60)) {
+            if (DT > 0) DT--; // Decrement Delay Timer if active
             if (ST > 0) {
-                ST--;
-                // TODO: Add sound output here if ST > 0
+                ST--; // Decrement Sound Timer if active
+                // TODO: Add actual sound output here when ST > 0 (e.g., play a beep)
             }
-            last_timer_update = current_time;
+            last_timer_update = current_time; // Reset timer update timestamp
         }
 
-        // --- Frame Rate and Graphics Drawing ---
-        // Aim for roughly 60Hz display refresh, and multiple CPU cycles per frame
-        if (current_time - last_cycle_time >= (1000 / 60)) { // ~60 FPS
-            if (draw_flag) { // Only draw if a DRW instruction happened
-                draw_graphics();
-                draw_flag = 0; // Reset flag
-            }
-            last_cycle_time = current_time;
-            cycles_this_frame = 0; // Reset cycle counter for next frame
+        // Synchronize drawing and reset cycle counter for the next frame
+        // This ensures the display updates at a consistent rate (approx. 60 FPS)
+        if (current_time - last_frame_time >= (1000 / 60)) {
+            cycles_executed_this_frame = 0; // Reset cycles for the new frame
+            last_frame_time = current_time;   // Reset frame time
+        } else {
+            // If we're ahead of schedule for the 60FPS frame rate,
+            // introduce a small delay to prevent busy-waiting.
+            SDL_Delay(1);
         }
-        else if (current_time - last_cycle_time < (1000 / 60) && cycles_this_frame >= CPU_CYCLES_PER_FRAME) {
-            // If we've done enough cycles for this frame, wait for the next frame slot
-            SDL_Delay((1000 / 60) - (current_time - last_cycle_time));
-        }
-
-        // Short delay to prevent busy-waiting, especially if CPU_CYCLES_PER_FRAME is low
-        // and current_time - last_cycle_time is still less than (1000/60)
-        SDL_Delay(1);
     }
 
-    // Clean up SDL resources
+    // --- Cleanup SDL Resources ---
     SDL_DestroyTexture(sdlTexture);
     SDL_DestroyRenderer(sdlRenderer);
     SDL_DestroyWindow(sdlWindow);
-    SDL_Quit();
+    SDL_Quit(); // Quit SDL subsystems
 
-    return 0;
+    return 0; // Program exited successfully
 }
