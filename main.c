@@ -3,7 +3,7 @@
 #include <time.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <SDL.h>
+#include <SDL2/SDL.h>
 
 #define MEM_SIZE 4096
 #define STCK_SIZE 16
@@ -499,12 +499,12 @@ void decodeAndExecute(uint16_t opcode){
             ____|____
             4-b | 4-b
      */
-    uint8_t fb = (opcode >> 7) & 0xff; //first byte
-    uint8_t fs = (fb >> 3) & 0x0f; //first symbol
+    uint8_t fb = (opcode >> 8) & 0xff; //first byte
+    uint8_t fs = (fb >> 4) & 0x0f; //first symbol
     uint8_t ss = fb & 0x0f; //second symbol
 
     uint8_t sb = opcode & 0x00ff; //second byte
-    uint8_t ts = (sb >> 3) & 0x0f; // third symbol
+    uint8_t ts = (sb >> 4) & 0x0f; // third symbol
     uint8_t ffs = sb & 0x0f; // fourth symbol
     // some instructions requires 2-nd, 3-rd and 4-th bytes as address
     uint16_t nnn = opcode & 0x0fff;
