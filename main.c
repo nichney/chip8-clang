@@ -200,6 +200,72 @@ void setup_key_map() {
     sdl_key_map[SDL_SCANCODE_V] = 0xF; // F
 }
 
+void error_out_of_stack(){
+    printf("SP is out of stack! Export memory dump to out_of_stack.hex\n");
+    // here we should write all registers and stack to memory
+    // and export dump file
+
+    // First, we don't need  first 512 bytes because it only contains sprites,
+    // so we could use it for debug information
+    for(int i = 0; i < 0x200; i++) 
+        MEMORY[i] = 0; // clear first 512 bytes
+
+    /* Here's scheme:
+       address | register
+       ------------------
+         0x0   |    V0
+         0x1   |    V1
+         0x2   |    V2
+         0x3   |    V3
+         0x4   |    V4
+         0x5   |    V5
+         0x6   |    V6
+         0x7   |    V7
+         0x8   |    V8
+         0x9   |    V9
+         0xA   |    VA
+         0xB   |    VB
+         0xC   |    VC
+         0xD   |    VD
+         0xE   |    VE
+         0xF   |    VF
+         0x10  |    DT
+         0x11  |    ST
+         0x12  |    SP
+         0x13  |    PC (2 bytes long)
+         0x15  |    I  (2 bytes long)
+
+         Stack is located from 0x17 to 0x36
+         Keyboard is located from 0x37 to 0x46
+    */
+    for(int i=0; i < 0xf; i++)
+        MEMORY[i] = V[i]; // writing V0-VF
+    MEMORY[0x10] = DT;
+    MEMORY[0x11] = ST;
+    MEMORY[0x12] = SP;
+    MEMORY[0x13] = (PC >> 8) & 0xff;
+    MEMORY[0x14] = PC & 0xff;
+    MEMORY[0x15] = (I >> 8) & 0xff;
+    MEMORY[0x16] = I & 0xff;
+
+    for(int i = 0x17; i < 0x37; i++)
+        MEMORY[i] = STACK[i - 0x17];
+
+    for(int i = 0x37; i < 0x46; i++)
+        MEMORY[i] = KEYBOARD[i - 0x37];
+
+    // write to file
+    FILE *dump_file = fopen("out_of_stack.hex", "wb");
+    if (dump_file == NULL) {
+        perror("Error opening dump file"); // Prints a system error message
+    } else {
+        fwrite(MEMORY, sizeof(uint8_t), MEM_SIZE, dump_file);
+        fclose(dump_file);
+        printf("Memory dump exported to out_of_stack.hex\n");
+    }
+    exit(1); // Terminate the program after dumping
+}
+
 
 int handle_input() {
     SDL_Event event;
@@ -235,6 +301,9 @@ void inst_ret(){
     // RET - return from a subroutine
     PC = STACK[SP]; // set the address for the top of the stack
     SP--; // substract 1 from stack pointer
+    if(SP < 0){
+        error_out_of_stack();
+    }
     PC += 2;
 }
 
@@ -246,6 +315,9 @@ void inst_jp(uint16_t address){
 void inst_call(uint16_t address){
     // CALL addr - call a subroutine at addr
     SP += 1;
+    if(SP > (STCK_SIZE - 1)){
+        error_out_of_stack();
+    }
     STACK[SP] = PC;
     PC = address;
 }
