@@ -4,10 +4,19 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_audio.h>
+#include <math.h>
+
+#define SAMPLE_RATE 44100
+#define AMPLITUDE 28000
+#define FREQUENCY 440
+#define NUM_SAMPLES 2048
 
 #define MEM_SIZE 4096
 #define STCK_SIZE 16
 #define SCRN_SIZE 64*32
+
+
 
 // SDL globals
 SDL_Window* sdlWindow = NULL;
@@ -20,6 +29,7 @@ uint8_t sdl_key_map[SDL_NUM_SCANCODES]; // Max number of scancodes
 // hidden registers
 int waiting_for_key = 0, key_dest = 0;
 int draw_screen_flag = 0; // 1 when DRW called
+static int audio_playing = 0; // 1 is on
 
 // common-use registers
 uint8_t V[16]; //V[0]-V[0xF]
@@ -82,6 +92,33 @@ int load_rom(const char* filename){
     return 1; 
 
 }
+
+
+void audio_callback(void* userdata, Uint8* stream, int len) {
+    // Cast the stream to a signed 16-bit integer array
+    Sint16* audio_stream = (Sint16*)stream;
+    static double phase = 0; // Keep track of the phase for continuous sine wave
+
+    // Calculate how many samples to generate
+    int num_samples_to_generate = len / sizeof(Sint16);
+
+    for (int i = 0; i < num_samples_to_generate; ++i) {
+        if (audio_playing) {
+            // Generate a sine wave sample
+            audio_stream[i] = (Sint16)(AMPLITUDE * sin(phase * 2 * M_PI));
+            // Increment phase based on frequency and sample rate
+            phase += (double)FREQUENCY / SAMPLE_RATE;
+            // Wrap phase around 1.0 to keep it within [0, 1)
+            if (phase >= 1.0) {
+                phase -= 1.0;
+            }
+        } else {
+            // If not playing, fill with silence
+            audio_stream[i] = 0;
+        }
+    }
+}
+
 
 void init_machine(void)
 {
@@ -704,6 +741,7 @@ void decodeAndExecute(uint16_t opcode){
             break;
         default:
             inst_cls();
+            printf("Error: unknown opcode '%u'\n", fs);
             break;
     }
 }
@@ -720,6 +758,24 @@ int main(int argc, char* argv[]){
     init_machine();
     // Set up the keyboard mapping for SDL scancodes to CHIP-8 keys
     setup_key_map();
+
+    // --- SDL Audio Setup ---
+    SDL_AudioSpec desiredSpec, obtainedSpec;
+
+    SDL_zero(desiredSpec); // Initialize to all zeros
+    desiredSpec.freq = SAMPLE_RATE;        // Sample rate
+    desiredSpec.format = AUDIO_S16SYS;     // Signed 16-bit audio in system byte order
+    desiredSpec.channels = 1;              // Mono
+    desiredSpec.samples = NUM_SAMPLES;     // Buffer size (power of 2 is good)
+    desiredSpec.callback = audio_callback; // Our callback function
+    desiredSpec.userdata = NULL;           // No user data
+
+     // Open the audio device
+    if (SDL_OpenAudio(&desiredSpec, &obtainedSpec) < 0) {
+        fprintf(stderr, "Failed to open audio: %s\n", SDL_GetError());
+        return 1; // Or handle error appropriately
+    }
+    // --- End SDL Audio Setup ---
 
     // Attempt to load the specified ROM file
     if(!load_rom(argv[1])){
@@ -789,7 +845,26 @@ int main(int argc, char* argv[]){
             if (DT > 0) DT--; // Decrement Delay Timer if active
             if (ST > 0) {
                 ST--; // Decrement Sound Timer if active
-                // TODO: Add actual sound output here when ST > 0 (e.g., play a beep)
+
+                if (ST > 0) {
+                    // If ST is still greater than 0, keep playing sound
+                    if (!audio_playing) {
+                        SDL_PauseAudio(0); // Unpause audio, start playing
+                        audio_playing = 1;
+                    }
+                } else {
+                    // If ST just reached 0, stop playing sound
+                    if (audio_playing) {
+                        SDL_PauseAudio(1); // Pause audio, stop playing
+                        audio_playing = 0;
+                    }
+                }
+            } else {
+                // If ST is already 0, ensure sound is off
+                if (audio_playing) {
+                    SDL_PauseAudio(1); // Pause audio
+                    audio_playing = 0;
+                }
             }
             last_timer_update = current_time; // Reset timer update timestamp
         }
@@ -810,6 +885,7 @@ int main(int argc, char* argv[]){
     SDL_DestroyTexture(sdlTexture);
     SDL_DestroyRenderer(sdlRenderer);
     SDL_DestroyWindow(sdlWindow);
+    SDL_CloseAudio(); // Close the audio device
     SDL_Quit(); // Quit SDL subsystems
 
     return 0; // Program exited successfully
