@@ -29,6 +29,7 @@ uint8_t sdl_key_map[SDL_NUM_SCANCODES]; // Max number of scancodes
 // hidden registers
 int waiting_for_key = 0, key_dest = 0;
 int draw_screen_flag = 0; // 1 when DRW called
+int key_press_buffer = -1;     // Stores the value of the *single* key just pressed for FX0A, -1 if none
 static int audio_playing = 0; // 1 is on
 
 // common-use registers
@@ -303,23 +304,38 @@ void error_out_of_stack(){
     exit(1); // Terminate the program after dumping
 }
 
-
 int handle_input() {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_QUIT) {
             return 0; // Signal to quit the emulator
         }
+
         if (event.type == SDL_KEYDOWN) {
             uint8_t chip8_key = sdl_key_map[event.key.keysym.scancode];
             if (chip8_key != 0xFF) { // If it's a mapped key
                 KEYBOARD[chip8_key] = 1;
+
+                // If we are waiting for a key (due to FX0A)
+                // AND the key_press_buffer is currently empty (-1 means no key recorded yet)
+                // THEN record this new key press.
+                if (waiting_for_key && key_press_buffer == -1) {
+                    key_press_buffer = chip8_key;
+                }
             }
         }
+
         if (event.type == SDL_KEYUP) {
             uint8_t chip8_key = sdl_key_map[event.key.keysym.scancode];
             if (chip8_key != 0xFF) { // If it's a mapped key
                 KEYBOARD[chip8_key] = 0;
+
+                // If the key that was just released is the one currently stored
+                // in the key_press_buffer, then clear the buffer.
+                // This ensures that the *next* FX0A will wait for a new press.
+                if (key_press_buffer == chip8_key) {
+                    key_press_buffer = -1;
+                }
             }
         }
     }
@@ -531,6 +547,7 @@ void inst_ld_k(uint8_t x){
     // LD Vx, K - wait for a key press, store the value of key in Vx
     waiting_for_key = 1;
     key_dest = x;
+    key_press_buffer = -1;
 }
 
 void inst_dt_ld(uint8_t x){
@@ -749,10 +766,13 @@ void decodeAndExecute(uint16_t opcode){
 
 int main(int argc, char* argv[]){
     // Check if a ROM file path was provided as a command-line argument
+    int debug = 0; // debug is off by default
     if(argc < 2){
         printf("Usage: %s <path_to_rom>\n", argv[0]);
         return 1;
     }
+    if(argv[2] != NULL && strcmp(argv[2], "-d") == 0)
+        debug = 1;
 
     // Initialize the CHIP-8 machine and SDL
     init_machine();
@@ -808,6 +828,10 @@ int main(int argc, char* argv[]){
             if (cycles_executed_this_frame < CYCLES_PER_FRAME) {
                 // Fetch the 16-bit opcode from memory (PC points to the first byte)
                 uint16_t opcode = MEMORY[PC] << 8 | MEMORY[PC + 1];
+
+                if(debug)
+                    printf("Executing %x opcode at memory %x\n", opcode, PC);
+
                 decodeAndExecute(opcode); // Decode and execute the instruction
                 cycles_executed_this_frame++; // Increment cycle counter
             }
@@ -818,22 +842,17 @@ int main(int argc, char* argv[]){
                 draw_screen_flag = 0; // Reset the flag
             }
         } else {
-            // If the emulator is in a 'waiting for key' state (FX0A instruction)
-            int key_found = 0;
-            // Iterate through all possible CHIP-8 keys to check for a press
-            for(int i = 0; i < 16; i++){
-                if(KEYBOARD[i]){ // If a key is currently pressed
-                    V[key_dest] = i;       // Store the pressed key's value in the target Vx register
-                    waiting_for_key = 0;   // Reset the waiting flag
-                    PC += 2;               // Advance PC (as specified by FX0A behavior)
-                    key_found = 1;         // Mark that a key was found
-                    break;                 // Exit the loop (only one key is needed)
-                }
-            }
-            // If no key was found yet, pause briefly and continue waiting
-            if (!key_found) {
-                SDL_Delay(10); // Small delay to prevent busy-waiting while waiting for key
-                continue;      // Skip timer updates and frame rate control until a key is pressed
+            // Check if handle_input() has populated key_press_buffer with a new key press
+            if (key_press_buffer != -1) { // A key has been pressed since FX0A was called
+                V[key_dest] = key_press_buffer; // Store the pressed key's value in Vx
+                waiting_for_key = 0;            // Exit the waiting state
+                PC += 2;                        // Advance PC, as the instruction is now complete
+            } else {
+                // No key has been pressed yet for FX0A, so we continue waiting.
+                // We should avoid processing more opcodes until a key is found.
+                // A small delay here is good to prevent busy-waiting.
+                SDL_Delay(10);
+                continue; // Skip timer updates and frame rate control, just keep polling for key
             }
         }
 
